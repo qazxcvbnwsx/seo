@@ -3,6 +3,14 @@ import re
 import urllib.request
 import pandas as pd
 import streamlit as st
+import spacy
+
+# Ładowanie polskiego modelu językowego
+@st.cache_resource
+def load_nlp():
+    return spacy.load("pl_core_news_sm")
+
+nlp = load_nlp()
 
 st.set_page_config(
     page_title="SEO Internal Link Finder",
@@ -11,7 +19,7 @@ st.set_page_config(
 )
 
 st.title("🔗 Generator Linkowania Wewnętrznego")
-st.caption("Automatycznie dopasowuj adresy URL z sitemapy XML do fraz w Twoim artykule.")
+st.caption("Dopasowuje adresy URL z sitemapy na podstawie słów kluczowych i odmiany języka polskiego.")
 
 col1, col2 = st.columns([1, 2])
 
@@ -23,7 +31,6 @@ with col1:
 
 
 def fetch_and_parse_xml(url):
-    """Pobiera i parsuje pojedynczy plik XML"""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
@@ -35,7 +42,6 @@ def fetch_and_parse_xml(url):
 
 
 def get_urls_from_sitemap(url, visited=None):
-    """Rekurencyjnie pobiera wszystkie końcowe adresy URL, w tym z indeksów sitemap"""
     if visited is None:
         visited = set()
 
@@ -55,43 +61,70 @@ def get_urls_from_sitemap(url, visited=None):
     for elem in root.iter():
         if elem.tag.endswith('loc') and elem.text:
             loc = elem.text.strip()
-            # Sprawdzamy czy dany link prowadzi do kolejnej sitemapy (.xml)
             if loc.endswith('.xml') or 'sitemap' in loc.lower():
                 sub_sitemaps.append(loc)
             else:
                 page_urls.append(loc)
 
-    # Jeśli znaleziono adresy podstron, dodaj je
     urls.extend(page_urls)
 
-    # Jeśli znaleziono linki do pod-sitemap, pobierz z nich rekurencyjnie wszystkie adresy
     for sub_url in sub_sitemaps:
         if sub_url not in visited:
             urls.extend(get_urls_from_sitemap(sub_url, visited))
 
-    # Usunięcie ewentualnych duplikatów z zachowaniem kolejności
     return list(dict.fromkeys(urls))
+
+
+def get_lemmas(text_or_phrase):
+    """Zwraca podstawowe formy słów (lemy) w postaci listy"""
+    doc = nlp(text_or_phrase.lower())
+    return [token.lemma_ for token in doc if not token.is_punct and not token.is_stop and len(token.lemma_) > 2]
 
 
 def suggest_internal_links(text, urls):
     suggestions = []
-    for url in urls:
-        slug = url.rstrip("/").split("/")[-1]
-        keyword = slug.replace("-", " ")
 
-        if len(keyword) < 4:
+    # Wyciągamy formy podstawowe wszystkich słów z wklejonego tekstu
+    text_doc = nlp(text)
+    text_lemmas = {token.lemma_.lower(): token.text for token in text_doc if not token.is_punct}
+
+    # Słowa ignorowane (zbyt ogólne)
+    ignored_words = {"kontakt", "o-nas", "home", "polityka-prywatnosci", "kategoria", "tag"}
+
+    for url in urls:
+        # Wyciągamy słowa z adresu URL
+        slug = url.rstrip("/").split("/")[-1]
+        
+        if not slug or slug in ignored_words:
             continue
 
-        pattern = re.compile(re.escape(keyword), re.IGNORECASE)
-        match = re.search(pattern, text)
+        # Rozbijamy slug na pojedyncze słowa (np. "atrakcje-w-okolicy" -> ["atrakcje", "w", "okolicy"])
+        slug_words = slug.replace("-", " ").split()
+        
+        for word in slug_words:
+            word_lemmas = get_lemmas(word)
+            if not word_lemmas:
+                continue
+            
+            lemma = word_lemmas[0]
 
-        if match:
-            suggestions.append({
-                "Znaleziona fraza": match.group(0),
-                "Sugerowany Anchor": keyword,
-                "Docelowy URL": url
-            })
-    return suggestions
+            # Sprawdzamy czy podstawowa forma słowa z URL występuje w tekście
+            if lemma in text_lemmas:
+                matched_word_in_text = text_lemmas[lemma]
+                
+                suggestions.append({
+                    "Słowo w tekście": matched_word_in_text,
+                    "Forma podstawowa": lemma,
+                    "Dopasowane słowo z URL": word,
+                    "Docelowy URL": url
+                })
+
+    # Usuwamy ewentualne powtórzenia (ten sam URL dla tego samego słowa)
+    df_result = pd.DataFrame(suggestions)
+    if not df_result.empty:
+        df_result = df_result.drop_duplicates(subset=["Słowo w tekście", "Docelowy URL"])
+    
+    return df_result
 
 
 with col2:
@@ -100,18 +133,17 @@ with col2:
         if not sitemap_input or not text_input:
             st.error("⚠️ Proszę podać adres sitemapy oraz wkleić tekst.")
         else:
-            with st.spinner("Przeszukiwanie sitemapy i analizowanie tekstu..."):
+            with st.spinner("Przeszukiwanie sitemapy i analiza powiązań słownych..."):
                 try:
                     urls = get_urls_from_sitemap(sitemap_input)
-                    results = suggest_internal_links(text_input, urls)
+                    results_df = suggest_internal_links(text_input, urls)
 
-                    st.success(f"Pobrano łącznie {len(urls)} adresów z sitemapy (w tym z pod-sitemap).")
+                    st.success(f"Pobrano łącznie {len(urls)} adresów z sitemapy.")
 
-                    if results:
-                        df = pd.DataFrame(results)
-                        st.dataframe(df, use_container_width=True)
+                    if not results_df.empty:
+                        st.dataframe(results_df, use_container_width=True)
 
-                        csv_data = df.to_csv(index=False).encode('utf-8')
+                        csv_data = results_df.to_csv(index=False).encode('utf-8')
                         st.download_button(
                             label="📥 Pobierz raport CSV",
                             data=csv_data,
@@ -119,6 +151,6 @@ with col2:
                             mime="text/csv"
                         )
                     else:
-                        st.info("Nie znaleziono pasujących fraz w podanym tekście.")
+                        st.info("Nie znaleziono pasujących fraz.")
                 except Exception as e:
                     st.error(f"❌ Błąd: {e}")
