@@ -22,14 +22,22 @@ with col1:
     analyze_btn = st.button("🚀 Uruchom analizę SEO", type="primary")
 
 def get_urls_from_sitemap(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    response = urllib.request.urlopen(req, timeout=10)
-    xml_data = response.read()
+    # Nagłówki udające prawdziwą przeglądarkę Chrome
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    req = urllib.request.Request(url, headers=headers)
+
+    with urllib.request.urlopen(req, timeout=10) as response:
+        xml_data = response.read()
+
     root = ET.fromstring(xml_data)
 
     urls = []
     for elem in root.iter():
-        if elem.tag.endswith('loc') and elem.text:
+        if elem.tag.endswith("loc") and elem.text:
             urls.append(elem.text.strip())
     return urls
 
