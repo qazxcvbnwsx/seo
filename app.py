@@ -5,14 +5,10 @@ import pandas as pd
 import streamlit as st
 import spacy
 
-# Pobieranie modelu przy pierwszym uruchomieniu
+# Ładowanie polskiego modelu językowego pobranego przez requirements.txt
 @st.cache_resource
 def load_nlp():
-    try:
-        return spacy.load("pl_core_news_sm")
-    except OSError:
-        spacy.cli.download("pl_core_news_sm")
-        return spacy.load("pl_core_news_sm")
+    return spacy.load("pl_core_news_sm")
 
 nlp = load_nlp()
 
