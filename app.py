@@ -5,10 +5,14 @@ import pandas as pd
 import streamlit as st
 import spacy
 
-# Ładowanie polskiego modelu językowego
+# Pobieranie modelu przy pierwszym uruchomieniu
 @st.cache_resource
 def load_nlp():
-    return spacy.load("pl_core_news_sm")
+    try:
+        return spacy.load("pl_core_news_sm")
+    except OSError:
+        spacy.cli.download("pl_core_news_sm")
+        return spacy.load("pl_core_news_sm")
 
 nlp = load_nlp()
 
@@ -76,7 +80,6 @@ def get_urls_from_sitemap(url, visited=None):
 
 
 def get_lemmas(text_or_phrase):
-    """Zwraca podstawowe formy słów (lemy) w postaci listy"""
     doc = nlp(text_or_phrase.lower())
     return [token.lemma_ for token in doc if not token.is_punct and not token.is_stop and len(token.lemma_) > 2]
 
@@ -84,21 +87,17 @@ def get_lemmas(text_or_phrase):
 def suggest_internal_links(text, urls):
     suggestions = []
 
-    # Wyciągamy formy podstawowe wszystkich słów z wklejonego tekstu
     text_doc = nlp(text)
     text_lemmas = {token.lemma_.lower(): token.text for token in text_doc if not token.is_punct}
 
-    # Słowa ignorowane (zbyt ogólne)
     ignored_words = {"kontakt", "o-nas", "home", "polityka-prywatnosci", "kategoria", "tag"}
 
     for url in urls:
-        # Wyciągamy słowa z adresu URL
         slug = url.rstrip("/").split("/")[-1]
         
         if not slug or slug in ignored_words:
             continue
 
-        # Rozbijamy slug na pojedyncze słowa (np. "atrakcje-w-okolicy" -> ["atrakcje", "w", "okolicy"])
         slug_words = slug.replace("-", " ").split()
         
         for word in slug_words:
@@ -108,7 +107,6 @@ def suggest_internal_links(text, urls):
             
             lemma = word_lemmas[0]
 
-            # Sprawdzamy czy podstawowa forma słowa z URL występuje w tekście
             if lemma in text_lemmas:
                 matched_word_in_text = text_lemmas[lemma]
                 
@@ -119,7 +117,6 @@ def suggest_internal_links(text, urls):
                     "Docelowy URL": url
                 })
 
-    # Usuwamy ewentualne powtórzenia (ten sam URL dla tego samego słowa)
     df_result = pd.DataFrame(suggestions)
     if not df_result.empty:
         df_result = df_result.drop_duplicates(subset=["Słowo w tekście", "Docelowy URL"])
